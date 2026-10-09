@@ -24,7 +24,10 @@ struct ItemRow: View {
         let pinned = monitor.isPinned(item)
         let hidden = monitor.isHidden(item)
 
-        HStack(alignment: .top, spacing: 9) {
+        // Os chips ficam abaixo, na largura inteira da linha (a coluna de ações só ocupa
+        // a altura de nome + detalhe), alinhados ao texto.
+        VStack(alignment: .leading, spacing: 3) {
+          HStack(alignment: .top, spacing: 9) {
             RowDot(color: item.status.color, glow: item.status != .stopped && item.status != .notLoaded)
                 .padding(.top, 5)
                 .frame(width: 14)
@@ -55,7 +58,6 @@ struct ItemRow: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
-                chips
             }
             .opacity(hidden ? 0.5 : (item.isGhost ? 0.6 : 1))
 
@@ -63,6 +65,10 @@ struct ItemRow: View {
 
             actions(busy: busy)
                 .padding(.top, 1)
+          }
+          chips
+            .padding(.leading, 23)
+            .opacity(hidden ? 0.5 : (item.isGhost ? 0.6 : 1))
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
@@ -88,9 +94,22 @@ struct ItemRow: View {
         }
     }
 
+    /// Mostra quantas portas couberem (3, 1 ou nenhuma). A última opção pode truncar o
+    /// status, mas nunca força a largura da lista: o que sobrar é cortado na própria linha.
     private var chips: some View {
+        ViewThatFits(in: .horizontal) {
+            chipRow(ports: 3)
+            chipRow(ports: 1)
+            chipRow(ports: 0)
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                .clipped()
+        }
+    }
+
+    private func chipRow(ports shown: Int) -> some View {
         HStack(spacing: 4) {
-            if item.status != .running || item.statusNote != nil {
+            // Container rodando: a nota do Docker ("Up 2 hours") só repete o chip de uptime.
+            if item.status != .running || (item.statusNote != nil && item.kind != .docker) {
                 Chip(text: item.chipStatusText, tint: item.status == .stopped || item.status == .notLoaded ? nil : item.status.color)
             }
             if let up = item.uptime {
@@ -102,11 +121,12 @@ struct ItemRow: View {
             if let mem = item.memBytes, item.status.isUp || item.status == .unhealthy {
                 LiveChip(text: Fmt.memory(mem), symbol: "memorychip", minWidth: 40)
             }
-            ForEach(item.ports.prefix(3), id: \.self) { PortChip(port: $0) }
-            if item.ports.count > 3 {
-                Chip(text: "+\(item.ports.count - 3)")
+            ForEach(item.ports.prefix(shown), id: \.self) { PortChip(port: $0, host: item.host) }
+            if item.ports.count > shown {
+                Chip(text: "+\(item.ports.count - shown)")
+                    .help(item.ports.map { ":\($0)" }.joined(separator: " "))
             }
-            if let pid = item.pid, item.ports.count < 2 {
+            if let pid = item.pid, item.ports.count < 2, shown > 0 {
                 Chip(text: "\(pid)", symbol: "number", mono: true)
             }
         }
@@ -283,6 +303,7 @@ struct LiveChip: View {
                 .font(.system(size: 10, weight: .medium))
                 .monospacedDigit()
                 .lineLimit(1)
+                .fixedSize() // valor curto: nunca trunca (o excesso da linha é cortado em `chips`)
                 .frame(minWidth: minWidth, alignment: .leading)
         }
         .foregroundStyle(tint ?? .secondary)
@@ -327,7 +348,7 @@ struct ItemMenu: View {
         if !item.ports.isEmpty {
             Menu("Abrir porta") {
                 ForEach(item.ports, id: \.self) { p in
-                    Button("localhost:\(String(p))") { Actions.openPort(p) }
+                    Button("\(Actions.portHost(item.host)):\(String(p))") { Actions.openPort(p, host: item.host) }
                 }
             }
         }

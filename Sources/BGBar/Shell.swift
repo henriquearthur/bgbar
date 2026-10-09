@@ -31,7 +31,9 @@ enum Shell {
         return nil
     }
 
-    static func run(_ executable: String, _ args: [String], timeout: TimeInterval = 8) async -> Result {
+    /// `input`, se houver, vai para o stdin do processo (ex.: script para `ssh host sh`).
+    static func run(_ executable: String, _ args: [String], timeout: TimeInterval = 8,
+                    input: String? = nil) async -> Result {
         guard let exe = which(executable) else {
             return Result(status: 127, out: "", err: "\(executable): não encontrado")
         }
@@ -47,12 +49,19 @@ enum Shell {
                 let outPipe = Pipe(), errPipe = Pipe()
                 process.standardOutput = outPipe
                 process.standardError = errPipe
-                process.standardInput = FileHandle.nullDevice
+                let inPipe = input == nil ? nil : Pipe()
+                process.standardInput = inPipe ?? FileHandle.nullDevice
                 do {
                     try process.run()
                 } catch {
                     cont.resume(returning: Result(status: -1, out: "", err: error.localizedDescription))
                     return
+                }
+                if let inPipe, let input {
+                    signal(SIGPIPE, SIG_IGN) // processo que morre antes de ler não derruba o app
+                    // Scripts pequenos: cabem no buffer do pipe, não bloqueiam antes da leitura.
+                    try? inPipe.fileHandleForWriting.write(contentsOf: Data(input.utf8))
+                    try? inPipe.fileHandleForWriting.close()
                 }
                 // Timeout: SIGTERM e, se ainda assim não sair, SIGKILL 2 s depois
                 // (senão a leitura do pipe ficaria presa para sempre).

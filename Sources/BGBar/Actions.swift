@@ -12,7 +12,10 @@ enum Actions {
     static func canStop(_ item: Item) -> Bool { item.kind != .dev && (item.status.isUp || item.status == .unhealthy || item.status == .restarting) }
     static func canRestart(_ item: Item) -> Bool { item.kind != .dev && !item.isGhost && item.status != .notLoaded }
     static func canKill(_ item: Item) -> Bool { (item.pid ?? 0) > 1 && !item.isGhost }
-    static func hasLog(_ item: Item) -> Bool { item.kind == .docker || !item.logPaths.isEmpty }
+    /// Serviço systemd remoto sempre tem log (journal).
+    static func hasLog(_ item: Item) -> Bool {
+        item.kind == .docker || !item.logPaths.isEmpty || (item.host != nil && item.kind == .agent && !item.isGhost)
+    }
 
     // MARK: Execução (ponto único: busy + supressão + toast + refresh)
 
@@ -44,11 +47,12 @@ enum Actions {
     }
 
     private static func execute(_ op: Op, _ item: Item) async -> String? {
+        if let host = item.host { return await doRemote(op, item, host: host) }
         switch op {
-        case .start: await doStart(item)
-        case .stop: await doStop(item)
-        case .restart: await doRestart(item)
-        case .kill(let force): await doKill(item, force: force)
+        case .start: return await doStart(item)
+        case .stop: return await doStop(item)
+        case .restart: return await doRestart(item)
+        case .kill(let force): return await doKill(item, force: force)
         }
     }
 
@@ -95,6 +99,22 @@ enum Actions {
         }
     }
 
+    /// Mesma ação, executada por ssh na máquina do item (systemctl --user, docker, kill).
+    private static func doRemote(_ op: Op, _ item: Item, host: String) async -> String? {
+        guard let script = Remote.actionScript(op, item) else { return nil }
+        let r = await Remote.run(host, script, timeout: 40)
+        switch op {
+        case .start: return report(r, item, verb: "iniciar", done: "\(item.name) iniciado")
+        case .stop: return report(r, item, verb: "parar", done: "\(item.name) parado")
+        case .restart: return report(r, item, verb: "reiniciar", done: "\(item.name) reiniciado")
+        case .kill(let force):
+            let pid = item.pid.map(String.init) ?? "?"
+            if r.status == 3 { return "\(item.name) (PID \(pid)) já não existe" }
+            if r.status == 4 { return "PID \(pid) agora é outro processo; não encerrei" }
+            return report(r, item, verb: "encerrar", done: "\(force ? "SIGKILL" : "SIGTERM") enviado para \(item.name) (PID \(pid))")
+        }
+    }
+
     /// SIGTERM (ou SIGKILL se force). A UI já pediu confirmação antes de chamar.
     /// Recusa PID ≤ 1, o próprio BGBar, processo de outro usuário e PID reaproveitado
     /// (início do processo atual diferente do que a lista mostrava).
@@ -133,8 +153,14 @@ enum Actions {
 
     // MARK: Utilidades simples
 
-    static func openPort(_ port: Int) {
-        guard let url = URL(string: "http://localhost:\(port)") else { return }
+    /// Endereço para abrir portas do item: localhost ou o nome de rede da máquina remota.
+    static func portHost(_ host: String?) -> String {
+        guard let host else { return "localhost" }
+        return Monitor.shared.remote[host]?.hostname ?? host.split(separator: "@").last.map(String.init) ?? host
+    }
+
+    static func openPort(_ port: Int, host: String? = nil) {
+        guard let url = URL(string: "http://\(portHost(host)):\(port)") else { return }
         NSWorkspace.shared.open(url)
     }
 
@@ -150,8 +176,8 @@ enum Actions {
 
     static func openLog(_ item: Item, in app: LogApp) async {
         var urls: [URL]
-        if item.kind == .docker {
-            guard let url = await dumpDockerLog(item) else { return }
+        if item.kind == .docker || item.host != nil {
+            guard let url = await dumpLog(item) else { return }
             urls = [url]
         } else {
             let paths = item.logPaths
@@ -180,9 +206,8 @@ enum Actions {
     /// Últimas linhas do log (arquivo ou `docker logs`). Fora da main thread.
     static func logTail(_ item: Item, lines: Int = 200) async -> String {
         let n = max(1, lines)
-        if item.kind == .docker {
-            guard let id = item.containerID else { return "Container sem ID." }
-            let r = await Shell.run("docker", ["logs", "--tail", String(n), id], timeout: 15)
+        if item.kind == .docker || item.host != nil {
+            guard let r = await commandLog(item, lines: n, timeout: 15) else { return "Este item não tem log." }
             if !r.ok && r.out.isEmpty {
                 let err = r.err.trimmingCharacters(in: .whitespacesAndNewlines)
                 return "Falha ao ler logs de \(item.name): \(err.isEmpty ? "exit \(r.status)" : err)"
@@ -266,13 +291,23 @@ enum Actions {
         }
     }
 
-    /// Grava `docker logs --tail 2000` num arquivo temporário e devolve a URL.
-    private static func dumpDockerLog(_ item: Item) async -> URL? {
-        guard let id = item.containerID else {
-            toast("Container sem ID: \(item.name)")
+    /// Log que vem de um comando e não de um arquivo local: `docker logs` e, em máquina
+    /// remota, o equivalente por ssh (docker, journal do systemd ou `tail`). nil = sem log.
+    private static func commandLog(_ item: Item, lines: Int, timeout: TimeInterval) async -> Shell.Result? {
+        if let host = item.host {
+            guard let script = Remote.logScript(item, lines: lines) else { return nil }
+            return await Remote.run(host, script, timeout: timeout)
+        }
+        guard let id = item.containerID else { return nil }
+        return await Shell.run("docker", ["logs", "--tail", String(lines), id], timeout: timeout)
+    }
+
+    /// Grava as últimas 2000 linhas de `commandLog` num arquivo temporário e devolve a URL.
+    private static func dumpLog(_ item: Item) async -> URL? {
+        guard let r = await commandLog(item, lines: 2000, timeout: 20) else {
+            toast("\(item.name) não tem log")
             return nil
         }
-        let r = await Shell.run("docker", ["logs", "--tail", "2000", id], timeout: 20)
         if !r.ok && r.out.isEmpty {
             toast("Falha ao ler logs de \(item.name): \(errorText(r))")
             return nil

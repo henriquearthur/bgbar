@@ -9,9 +9,17 @@ struct SectionView: View {
 
     var body: some View {
         let items = DockerFilter.visible(kind, showStopped: showStopped)
+        let groups = machineGroups(items)
         VStack(alignment: .leading, spacing: 6) {
-            Card {
-                content(items)
+            if groups.count > 0 {
+                ForEach(groups, id: \.title) { group in
+                    MachineHeader(title: group.title, remote: group.remote, items: group.items)
+                    Card { rows(group.items) }
+                }
+            } else {
+                Card {
+                    content(items)
+                }
             }
             let stopped = monitor.items(kind).count - items.count
             if stopped > 0 {
@@ -34,22 +42,37 @@ struct SectionView: View {
 
     @ViewBuilder
     private func content(_ items: [Item]) -> some View {
-        if kind == .docker && !monitor.dockerAvailable {
+        if kind == .docker && !monitor.dockerAvailable && items.isEmpty {
             EmptyState(symbol: "shippingbox.and.arrow.backward",
                        title: "Docker não está respondendo",
                        subtitle: "Abra o OrbStack ou o Docker Desktop; tento de novo sozinho.")
         } else if items.isEmpty {
             EmptyState(symbol: emptySymbol, title: emptyTitle, subtitle: emptySubtitle)
         } else {
-            VStack(spacing: 0) {
-                ForEach(Array(items.enumerated()), id: \.element.id) { idx, item in
-                    if idx > 0 {
-                        Divider().padding(.leading, 28).opacity(0.5)
-                    }
-                    ItemRow(item: item) { onSelect(item) }
+            rows(items)
+        }
+    }
+
+    private func rows(_ items: [Item]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { idx, item in
+                if idx > 0 {
+                    Divider().padding(.leading, 28).opacity(0.5)
                 }
+                ItemRow(item: item) { onSelect(item) }
             }
-            .padding(3)
+        }
+        .padding(3)
+    }
+
+    /// Com máquinas remotas e o filtro em "Todas", a lista vem separada por máquina
+    /// (este Mac primeiro), cada uma com seu cabeçalho. Vazio = lista única, sem cabeçalho.
+    private func machineGroups(_ items: [Item]) -> [(title: String, remote: Bool, items: [Item])] {
+        guard !monitor.hosts.isEmpty, monitor.machine.isEmpty, !items.isEmpty else { return [] }
+        let machines: [String?] = [nil] + monitor.hosts.map { Optional($0) }
+        return machines.compactMap { host in
+            let own = items.filter { $0.host == host }
+            return own.isEmpty ? nil : (host ?? "Este Mac", host != nil, own)
         }
     }
 
@@ -73,6 +96,34 @@ struct SectionView: View {
         case .docker: "Containers do OrbStack/Docker aparecem aqui."
         case .dev: "bun, node, python e afins aparecem quando subirem."
         }
+    }
+}
+
+/// Cabeçalho de um grupo de máquina na lista.
+private struct MachineHeader: View {
+    let title: String
+    let remote: Bool
+    let items: [Item]
+
+    var body: some View {
+        let up = items.filter { $0.status.isUp || $0.status == .unhealthy }.count
+        HStack(spacing: 5) {
+            Image(systemName: remote ? "server.rack" : "laptopcomputer")
+                .font(.system(size: 10, weight: .semibold))
+                .frame(width: 14)
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text("\(up)/\(items.count)")
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.tertiary)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 6)
+        .padding(.top, 4)
     }
 }
 

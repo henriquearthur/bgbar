@@ -89,7 +89,7 @@ final class Notifier: NSObject {
         case .docker: "Docker"
         case .dev: "Processo de dev"
         }
-        var parts = [kind, item.status.label]
+        var parts = [item.host.map { "\(item.kindTitle) em \($0)" } ?? kind, item.status.label]
         if let note = item.statusNote, !note.isEmpty {
             parts.append(note)
         } else if let code = item.exitCode {

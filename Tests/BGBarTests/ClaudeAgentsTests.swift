@@ -89,6 +89,24 @@ final class ClaudeAgentsTests: XCTestCase {
         XCTAssertEqual(pai.children.first?.children.first?.depth, 3)
     }
 
+    func testSessionWithoutSubagentsShowsWhileActive() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("bgbar-claude-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let proj = root.appendingPathComponent("-tmp-solo")
+        try FileManager.default.createDirectory(at: proj, withIntermediateDirectories: true)
+        let main = proj.appendingPathComponent("aaaaaaaa-2222-3333-4444-555555555555.jsonl")
+        try line(["type": "user", "cwd": "/tmp/solo", "timestamp": "2026-10-09T16:00:00Z"]).write(to: main)
+
+        let scanner = ClaudeAgentsScanner(root: root)
+        scanner.host = "devbox"
+        let s = try XCTUnwrap(scanner.scan().first)
+        XCTAssertEqual(s.projectName, "solo")
+        XCTAssertEqual(s.agents, [])
+        XCTAssertEqual(s.host, "devbox")
+        // Parada há mais que `mainOnly`: some.
+        XCTAssertEqual(scanner.scan(now: Date().addingTimeInterval(16 * 60)).count, 0)
+    }
+
     func testCycleBecomesRoots() throws {
         // Unidade: A→B→A vira raízes; C pendurado no ciclo continua filho de A; pai inexistente vira raiz.
         let p = ClaudeAgentsScanner.resolveParents(["a": "b", "b": "a", "c": "a", "d": "zz", "e": "e", "f": nil])

@@ -10,6 +10,8 @@ final class ClaudeAgentsScanner {
         var abandoned: TimeInterval = 20 * 60
         /// Janela de sessões exibidas.
         var window: TimeInterval = 2 * 3600
+        /// Sessão sem subagentes só aparece enquanto a conversa principal está ativa.
+        var mainOnly: TimeInterval = 15 * 60
     }
 
     struct Meta: Equatable {
@@ -21,6 +23,8 @@ final class ClaudeAgentsScanner {
 
     let root: URL
     var thresholds = Thresholds()
+    /// Máquina remota de onde `root` foi espelhado (carimbada nas sessões); nil = local.
+    var host: String?
 
     private var readers: [String: ClaudeTranscriptReader] = [:]
     private var metas: [String: (mtime: Date, meta: Meta)] = [:]
@@ -64,10 +68,11 @@ final class ClaudeAgentsScanner {
         return out.sorted { $0.lastActivityAt > $1.lastActivityAt }
     }
 
-    /// Sessões com pasta subagents/ cujo transcript principal ou pasta de subagentes mudou dentro da janela.
-    private func candidateSessions(in project: URL, now: Date) -> [(String, URL, URL)] {
+    /// Sessões com pasta subagents/ cujo transcript principal ou pasta de subagentes mudou dentro da janela,
+    /// mais as que só têm a conversa principal e foram escritas há pouco (`mainOnly`).
+    private func candidateSessions(in project: URL, now: Date) -> [(String, URL, URL?)] {
         guard let entries = try? fm.contentsOfDirectory(atPath: project.path) else { return [] }
-        var result: [(String, URL, URL)] = []
+        var result: [(String, URL, URL?)] = []
         for name in entries where !name.contains(".") {
             let sessionDir = project.appendingPathComponent(name)
             let subDir = sessionDir.appendingPathComponent("subagents")
@@ -77,16 +82,24 @@ final class ClaudeAgentsScanner {
             guard let newest, now.timeIntervalSince(newest) <= thresholds.window else { continue }
             result.append((name, mainURL, subDir))
         }
+        for name in entries where name.hasSuffix(".jsonl") {
+            let id = String(name.dropLast(".jsonl".count))
+            let mainURL = project.appendingPathComponent(name)
+            guard !isDir(project.appendingPathComponent(id).appendingPathComponent("subagents")),
+                  let m = mtime(mainURL), now.timeIntervalSince(m) <= thresholds.mainOnly else { continue }
+            result.append((id, mainURL, nil))
+        }
         return result
     }
 
-    private func buildSession(id: String, project: URL, mainURL: URL, subDir: URL, now: Date,
+    private func buildSession(id: String, project: URL, mainURL: URL, subDir: URL?, now: Date,
                               seenTranscripts: inout Set<String>, seenMetas: inout Set<String>) -> ClaudeSession? {
-        guard let files = try? fm.contentsOfDirectory(atPath: subDir.path) else { return nil }
+        let files = subDir.flatMap { try? fm.contentsOfDirectory(atPath: $0.path) } ?? []
         struct Flat { var meta: Meta; var node: ClaudeAgentNode; var summary: ClaudeTranscriptSummary; var mtime: Date }
         var flat: [String: Flat] = [:]
 
         for f in files where f.hasPrefix("agent-") && f.hasSuffix(".meta.json") {
+            guard let subDir else { break }
             let agentId = String(f.dropFirst("agent-".count).dropLast(".meta.json".count))
             let metaURL = subDir.appendingPathComponent(f)
             let jsonl = subDir.appendingPathComponent("agent-\(agentId).jsonl")
@@ -114,7 +127,12 @@ final class ClaudeAgentsScanner {
             )
             flat[agentId] = Flat(meta: meta, node: node, summary: s, mtime: mt)
         }
-        guard !flat.isEmpty else { return nil }
+        if flat.isEmpty {
+            // Só a conversa principal: aparece enquanto está ativa.
+            guard let m = mtime(mainURL), now.timeIntervalSince(m) <= thresholds.mainOnly else { return nil }
+            return ClaudeSession(id: id, projectName: projectName(sessionId: id, mainURL: mainURL, project: project),
+                                 lastActivityAt: m, agents: [], host: host)
+        }
 
         // Monta a árvore (pais desconhecidos e nós em ciclo viram raízes).
         let parents = Self.resolveParents(flat.mapValues { $0.meta.parentAgentId })
@@ -145,7 +163,7 @@ final class ClaudeAgentsScanner {
         let last = ([mainMtime] + flat.values.map { Optional($0.node.lastActivityAt) }).compactMap { $0 }.max() ?? now
         guard now.timeIntervalSince(last) <= thresholds.window else { return nil }
         return ClaudeSession(id: id, projectName: projectName(sessionId: id, mainURL: mainURL, project: project),
-                             lastActivityAt: last, agents: roots)
+                             lastActivityAt: last, agents: roots, host: host)
     }
 
     /// Pai efetivo de cada agente: nil quando o pai é desconhecido, é o próprio nó ou o nó está num ciclo

@@ -17,12 +17,12 @@ struct ClaudeAgentsTab: View {
 
     @ViewBuilder
     private func content(now: Date) -> some View {
-        let sessions = store.sessions
+        let sessions = store.sessions.filter { Monitor.shared.showsMachine($0.host) }
         VStack(alignment: .leading, spacing: 6) {
             if sessions.isEmpty {
                 EmptyState(symbol: "sparkles",
                            title: "Nenhum agente Claude em ação",
-                           subtitle: "Sessões do Claude Code com atividade nas últimas 2 h aparecem aqui, com a árvore de subagentes.")
+                           subtitle: "Sessões do Claude Code com subagentes nas últimas 2 h, ou com a conversa ativa nos últimos 15 min, aparecem aqui.")
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(sessions.enumerated()), id: \.element.id) { idx, session in
@@ -131,6 +131,9 @@ private struct SessionHeader: View {
             Text(session.projectName)
                 .font(.system(size: 11.5, weight: .semibold))
                 .lineLimit(1)
+            Chip(text: session.host ?? "Este Mac", symbol: session.host == nil ? "laptopcomputer" : "server.rack")
+                .fixedSize()
+                .opacity(Monitor.shared.hosts.isEmpty ? 0 : 1)
             Spacer(minLength: 4)
             if session.runningAgents > 0 {
                 Chip(text: "\(session.runningAgents) rodando", tint: ClaudeAgentState.running.tint)

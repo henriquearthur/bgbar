@@ -67,10 +67,11 @@ struct Chip: View {
 
 struct PortChip: View {
     let port: Int
+    var host: String? = nil
     @State private var hover = false
 
     var body: some View {
-        Button { Actions.openPort(port) } label: {
+        Button { Actions.openPort(port, host: host) } label: {
             HStack(spacing: 2) {
                 Text(":\(String(port))")
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
@@ -85,7 +86,7 @@ struct PortChip: View {
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
-        .help("Abrir http://localhost:\(String(port))")
+        .help("Abrir http://\(Actions.portHost(host)):\(String(port))")
     }
 }
 

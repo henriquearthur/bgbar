@@ -71,7 +71,7 @@ struct DetailView: View {
             .keyboardShortcut(.cancelAction)
 
             Spacer()
-            Label(item.kind.title, systemImage: item.kind.symbol)
+            Label(item.kindTitle, systemImage: item.kind.symbol)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Menu {
@@ -239,6 +239,7 @@ struct DetailView: View {
     private func infoGrid(_ item: Item) -> some View {
         Card {
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 7) {
+                if let host = item.host { row("Máquina") { mono(host) } }
                 row("Estado") {
                     HStack(spacing: 5) {
                         StatusDot(status: item.status, size: 6)
@@ -263,11 +264,11 @@ struct DetailView: View {
                 if let mem = item.memBytes { row("Memória") { Text(Fmt.memory(mem)).monospacedDigit() } }
                 if !item.ports.isEmpty {
                     row("Portas") {
-                        HStack(spacing: 4) { ForEach(item.ports, id: \.self) { PortChip(port: $0) } }
+                        HStack(spacing: 4) { ForEach(item.ports, id: \.self) { PortChip(port: $0, host: item.host) } }
                     }
                 }
-                if let label = item.label { row("Label") { mono(label) } }
-                if let plist = item.plistPath { row("Plist") { mono(Fmt.abbreviateHome(plist)) } }
+                if let label = item.label { row(item.host == nil ? "Label" : "Unit") { mono(label) } }
+                if let plist = item.plistPath { row(item.host == nil ? "Plist" : "Arquivo") { mono(Fmt.abbreviateHome(plist)) } }
                 if let cid = item.containerID { row("Container") { mono(String(cid.prefix(12))) } }
                 if item.kind == .docker, !item.detail.isEmpty { row("Imagem") { mono(item.detail) } }
                 if let group = item.group { row(item.kind == .docker ? "Projeto" : "Grupo") { Text(group) } }

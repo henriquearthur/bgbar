@@ -94,8 +94,13 @@ struct Item: Identifiable, Sendable, Equatable {
     var containerID: String?
     var workingDir: String?
     var command: String?
+    /// Máquina remota (destino do ssh) de onde o item veio; nil = este Mac.
+    var host: String?
     /// Linha fantasma de item fixado que não está rodando.
     var isGhost = false
+
+    /// Nome do tipo para o item: em máquina remota os "agents" são serviços systemd.
+    var kindTitle: String { host != nil && kind == .agent ? "systemd" : kind.title }
 
     var uptime: TimeInterval? {
         guard status.isUp || status == .unhealthy, let startedAt else { return nil }

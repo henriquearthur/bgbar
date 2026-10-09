@@ -26,6 +26,8 @@ struct ClaudeSession: Identifiable, Hashable {
     let projectName: String   // último componente do cwd
     let lastActivityAt: Date
     let agents: [ClaudeAgentNode] // raízes, com children preenchidos
+    /// Máquina remota (destino do ssh) de onde a sessão veio; nil = este Mac.
+    var host: String? = nil
 }
 
 @MainActor
@@ -42,6 +44,9 @@ final class ClaudeAgentsStore: ObservableObject {
     }
 
     private let engine: ClaudeAgentsEngine
+    private var local: [ClaudeSession] = []
+    private var remote: [String: [ClaudeSession]] = [:]
+    private var mirrors: [String: Task<Void, Never>] = [:]
 
     init(root: URL = ClaudeAgentsScanner.defaultRoot) {
         engine = ClaudeAgentsEngine(root: root)
@@ -51,10 +56,41 @@ final class ClaudeAgentsStore: ObservableObject {
     func start() {
         engine.start { [weak self] sessions in
             Task { @MainActor in
-                guard let self, self.sessions != sessions else { return }
-                self.sessions = sessions
+                self?.local = sessions
+                self?.publish()
             }
         }
+    }
+
+    /// Máquinas remotas a espelhar (chamado pelo `Monitor` quando a lista muda). Idempotente.
+    func setHosts(_ hosts: [String]) {
+        for (host, task) in mirrors where !hosts.contains(host) {
+            task.cancel()
+            mirrors[host] = nil
+            remote[host] = nil
+        }
+        for host in hosts where mirrors[host] == nil {
+            mirrors[host] = Task.detached(priority: .utility) { [weak self] in
+                let mirror = RemoteClaudeMirror(host: host)
+                while !Task.isCancelled {
+                    let round = await mirror.sync()
+                    await self?.setRemote(host, round.sessions)
+                    if !round.backlog { try? await Task.sleep(for: .seconds(4)) }
+                }
+            }
+        }
+        publish()
+    }
+
+    private func setRemote(_ host: String, _ sessions: [ClaudeSession]) {
+        guard mirrors[host] != nil else { return } // host removido enquanto a rodada corria
+        remote[host] = sessions
+        publish()
+    }
+
+    private func publish() {
+        let merged = (local + remote.values.flatMap { $0 }).sorted { $0.lastActivityAt > $1.lastActivityAt }
+        if merged != sessions { sessions = merged }
     }
 
     func stop() { engine.stop() }

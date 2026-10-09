@@ -26,7 +26,7 @@ private struct MenuBarLabel: View {
     var body: some View {
         let agents = claude.runningCount
         // Uma imagem só (ícone + número): HStack no rótulo do MenuBarExtra não renderiza direito.
-        Image(nsImage: StatusIcon.image(for: monitor.health, count: agents))
+        Image(nsImage: StatusIcon.image(for: monitor.overallHealth, count: agents))
             .accessibilityLabel(agents > 0 ? "BGBar, \(agents) agentes Claude rodando" : "BGBar")
     }
 }
